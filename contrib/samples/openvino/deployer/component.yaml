@@ -25,9 +25,11 @@ inputs:
   default: 224
 outputs:
 - name: Server endpoint
-metrics:
-  - name: latency
-  - name: accuracy
+metadata:
+  annotations:
+    metrics:
+      - name: latency
+      - name: accuracy
 implementation:
   container:
     image: gcr.io/constant-cubist-173123/inference_server/ml_deployer:13
