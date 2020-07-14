@@ -10,6 +10,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import argparse
 import logging
 
@@ -31,12 +32,13 @@ def create_parser():
   parser.add_argument('--vpc_subnets', type=str, required=False, help='The ID of the subnets in the VPC to which you want to connect your hpo job.', default='')
   parser.add_argument('--network_isolation', type=_utils.str_to_bool, required=False, help='Isolates the training container.', default=True)
   parser.add_argument('--tags', type=_utils.yaml_or_json_str, required=False, help='An array of key-value pairs, to categorize AWS resources.', default={})
+  parser.add_argument('--model_name_output_path', type=str, default='/tmp/model-name', help='Local output path for the file containing the name of the model SageMaker created.')
 
   return parser
 
 def main(argv=None):
   parser = create_parser()
-  args = parser.parse_args()
+  args = parser.parse_args(argv)
 
   logging.getLogger().setLevel(logging.INFO)
   client = _utils.get_sagemaker_client(args.region, args.endpoint_url)
@@ -45,9 +47,9 @@ def main(argv=None):
   _utils.create_model(client, vars(args))
 
   logging.info('Model creation completed.')
-  with open('/tmp/model_name.txt', 'w') as f:
-    f.write(args.model_name)
+
+  _utils.write_output(args.model_name_output_path, args.model_name)
 
 
 if __name__== "__main__":
-  main()
+  main(sys.argv[1:])

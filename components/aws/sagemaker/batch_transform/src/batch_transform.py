@@ -10,17 +10,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import argparse
 import logging
-from pathlib2 import Path
 
 from common import _utils
-
-try:
-  unicode
-except NameError:
-  unicode = str
-
 
 def create_parser():
   parser = argparse.ArgumentParser(description='SageMaker Batch Transformation Job')
@@ -48,26 +42,32 @@ def create_parser():
   parser.add_argument('--instance_count', type=int, required=False, help='The number of ML compute instances to use in the transform job.')
   parser.add_argument('--resource_encryption_key', type=str, required=False, help='The AWS KMS key that Amazon SageMaker uses to encrypt data on the storage volume attached to the ML compute instance(s).', default='')
   parser.add_argument('--tags', type=_utils.yaml_or_json_str, required=False, help='An array of key-value pairs, to categorize AWS resources.', default={})
-  parser.add_argument('--output_location_file', type=str, required=True, help='File path where the program will write the Amazon S3 URI of the transform job results.')
+  parser.add_argument('--output_location_output_path', type=str, default='/tmp/output-location', help='Local output path for the file containing the Amazon S3 URI of the transform job results.')
 
   return parser
 
 def main(argv=None):
   parser = create_parser()
-  args = parser.parse_args()
+  args = parser.parse_args(argv)
 
   logging.getLogger().setLevel(logging.INFO)
   client = _utils.get_sagemaker_client(args.region, args.endpoint_url)
   logging.info('Submitting Batch Transformation request to SageMaker...')
   batch_job_name = _utils.create_transform_job(client, vars(args))
   logging.info('Batch Job request submitted. Waiting for completion...')
-  _utils.wait_for_transform_job(client, batch_job_name)
 
-  Path(args.output_location_file).parent.mkdir(parents=True, exist_ok=True)
-  Path(args.output_location_file).write_text(unicode(args.output_location))
+  try:
+    _utils.wait_for_transform_job(client, batch_job_name)
+  except:
+    raise
+  finally:
+    cw_client = _utils.get_cloudwatch_client(args.region)
+    _utils.print_logs_for_job(cw_client, '/aws/sagemaker/TransformJobs', batch_job_name)
+
+  _utils.write_output(args.output_location_output_path, args.output_location)
 
   logging.info('Batch Transformation creation completed.')
 
 
 if __name__== "__main__":
-  main()
+  main(sys.argv[1:])

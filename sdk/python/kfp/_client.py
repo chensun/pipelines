@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import string
-import random
 import time
 import logging
 import json
@@ -24,7 +22,7 @@ import tempfile
 import warnings
 import yaml
 import zipfile
-from datetime import datetime
+import datetime
 from typing import Mapping, Callable
 
 import kfp
@@ -35,7 +33,21 @@ from kfp.compiler._k8s_helper import sanitize_k8s_name
 
 from kfp._auth import get_auth_token, get_gcp_access_token
 
-
+# TTL of the access token associated with the client. This is needed because
+# `gcloud auth print-access-token` generates a token with TTL=1 hour, after
+# which the authentication expires. This TTL is needed for kfp.Client()
+# initialized with host=<inverse proxy endpoint>.
+# Set to 55 mins to provide some safe margin.
+_GCP_ACCESS_TOKEN_TIMEOUT = datetime.timedelta(minutes=55)
+# Operators on scalar values. Only applies to one of |int_value|,
+# |long_value|, |string_value| or |timestamp_value|.
+_FILTER_OPERATIONS = {"UNKNOWN": 0,
+    "EQUALS" : 1,
+    "NOT_EQUALS" : 2,
+    "GREATER_THAN": 3,
+    "GREATER_THAN_EQUALS": 5,
+    "LESS_THAN": 6,
+    "LESS_THAN_EQUALS": 7}
 
 def _add_generated_apis(target_struct, api_module, api_client):
   '''Initializes a hierarchical API object based on the generated API module.
@@ -108,6 +120,9 @@ class Client(object):
     host = host or os.environ.get(KF_PIPELINES_ENDPOINT_ENV)
     self._uihost = os.environ.get(KF_PIPELINES_UI_ENDPOINT_ENV, host)
     config = self._load_config(host, client_id, namespace, other_client_id, other_client_secret, existing_token)
+    # Save the loaded API client configuration, as a reference if update is
+    # needed.
+    self._existing_config = config
     api_client = kfp_server_api.api_client.ApiClient(config)
     _add_generated_apis(self, kfp_server_api, api_client)
     self._job_api = kfp_server_api.api.job_service_api.JobServiceApi(api_client)
@@ -150,10 +165,13 @@ class Client(object):
     #
     if existing_token:
       token = existing_token
+      self._is_refresh_token = False
     elif client_id:
       token = get_auth_token(client_id, other_client_id, other_client_secret)
+      self._is_refresh_token = True
     elif self._is_inverse_proxy_host(host):
       token = get_gcp_access_token()
+      self._is_refresh_token = False
 
     if token:
       config.api_key['authorization'] = token
@@ -226,6 +244,14 @@ class Client(object):
       self._context_setting = {
         'namespace': '',
       }
+      
+  def _refresh_api_client_token(self):
+    """Refreshes the existing token associated with the kfp_api_client."""
+    if getattr(self, '_is_refresh_token', None):
+      return
+
+    new_token = get_gcp_access_token()
+    self._existing_config.api_key['authorization'] = new_token
 
   def set_user_namespace(self, namespace):
     """Set user namespace into local context setting file.
@@ -286,12 +312,35 @@ class Client(object):
       IPython.display.display(IPython.display.HTML(html))
     return experiment
 
+  def get_pipeline_id(self, name):
+    """Returns the pipeline id if a pipeline with the name exsists.
+    Args:
+      name: pipeline name
+    Returns:
+      A response object including a list of experiments and next page token.
+    """
+    pipeline_filter = json.dumps({
+      "predicates": [
+        {
+          "op":  _FILTER_OPERATIONS["EQUALS"],
+          "key": "name",
+          "stringValue": name,
+        }
+      ]
+    })
+    result = self._pipelines_api.list_pipelines(filter=pipeline_filter)
+    if len(result.pipelines)==1:
+      return result.pipelines[0].id
+    elif len(result.pipelines)>1:
+      raise ValueError("Multiple pipelines with the name: {} found, the name needs to be unique".format(name))
+    return None
+
   def list_experiments(self, page_token='', page_size=10, sort_by='', namespace=None):
     """List experiments.
     Args:
       page_token: token for starting of the page.
       page_size: size of the page.
-      sort_by: can be '[field_name]', '[field_name] des'. For example, 'name des'.
+      sort_by: can be '[field_name]', '[field_name] des'. For example, 'name desc'.
       namespace: kubernetes namespace where the experiment was created.
         For single user deployment, leave it as None;
         For multi user, input a namespace where the user is authorized.
@@ -330,7 +379,7 @@ class Client(object):
     while next_page_token is not None:
       list_experiments_response = self.list_experiments(page_size=100, page_token=next_page_token, namespace=namespace)
       next_page_token = list_experiments_response.next_page_token
-      for experiment in list_experiments_response.experiments:
+      for experiment in list_experiments_response.experiments or []:
         if experiment.name == experiment_name:
           return self._experiment_api.get_experiment(id=experiment.id)
     raise ValueError('No experiment is found with name {}.'.format(experiment_name))
@@ -363,18 +412,36 @@ class Client(object):
       with open(package_file, 'r') as f:
         return yaml.safe_load(f)
     else:
-      raise ValueError('The package_file '+ package_file + ' should ends with one of the following formats: [.tar.gz, .tgz, .zip, .yaml, .yml]')
+      raise ValueError('The package_file '+ package_file + ' should end with one of the following formats: [.tar.gz, .tgz, .zip, .yaml, .yml]')
 
   def list_pipelines(self, page_token='', page_size=10, sort_by=''):
     """List pipelines.
     Args:
       page_token: token for starting of the page.
       page_size: size of the page.
-      sort_by: one of 'field_name', 'field_name des'. For example, 'name des'.
+      sort_by: one of 'field_name', 'field_name desc'. For example, 'name desc'.
     Returns:
       A response object including a list of pipelines and next page token.
     """
     return self._pipelines_api.list_pipelines(page_token=page_token, page_size=page_size, sort_by=sort_by)
+
+  def list_pipeline_versions(self, pipeline_id: str, page_token='', page_size=10, sort_by=''):
+    """List all versions of a given pipeline.
+    Args:
+      pipeline_id: the string ID of a pipeline.
+      page_token: token for starting of the page.
+      page_size: size of the page.
+      sort_by: one of 'field_name', 'field_name desc'. For example, 'name desc'.
+    Returns:
+      A response object including a list of pipelines and next page token.
+    """
+    return self._pipelines_api.list_pipeline_versions(
+        resource_key_type="PIPELINE",
+        resource_key_id=pipeline_id,
+        page_token=page_token,
+        page_size=page_size,
+        sort_by=sort_by
+    )
 
   # TODO: provide default namespace, similar to kubectl default namespaces.
   def run_pipeline(self, experiment_id, job_name, pipeline_package_path=None, params={}, pipeline_id=None, version_id=None):
@@ -531,13 +598,11 @@ class Client(object):
     '''
     #TODO: Check arguments against the pipeline function
     pipeline_name = pipeline_func.__name__
-    run_name = run_name or pipeline_name + ' ' + datetime.now().strftime('%Y-%m-%d %H-%M-%S')
-    try:
-      (_, pipeline_package_path) = tempfile.mkstemp(suffix='.zip')
+    run_name = run_name or pipeline_name + ' ' + datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S')
+    with tempfile.TemporaryDirectory() as tmpdir:
+      pipeline_package_path = os.path.join(tmpdir, 'pipeline.yaml')
       compiler.Compiler().compile(pipeline_func, pipeline_package_path, pipeline_conf=pipeline_conf)
       return self.create_run_from_pipeline_package(pipeline_package_path, arguments, run_name, experiment_name, namespace)
-    finally:
-      os.remove(pipeline_package_path)
 
   def create_run_from_pipeline_package(self, pipeline_file: str, arguments: Mapping[str, str], run_name=None, experiment_name=None, namespace=None):
     '''Runs pipeline on KFP-enabled Kubernetes cluster.
@@ -560,7 +625,7 @@ class Client(object):
         self.run_id = run_info.id
 
       def wait_for_run_completion(self, timeout=None):
-        timeout = timeout or datetime.datetime.max - datetime.datetime.min
+        timeout = timeout or datetime.timedelta.max
         return self._client.wait_for_run_completion(self.run_id, timeout)
 
       def __repr__(self):
@@ -574,7 +639,9 @@ class Client(object):
       import warnings
       warnings.warn('Changing experiment name from "{}" to "{}".'.format(experiment_name, overridden_experiment_name))
     experiment_name = overridden_experiment_name or 'Default'
-    run_name = run_name or pipeline_name + ' ' + datetime.now().strftime('%Y-%m-%d %H-%M-%S')
+    run_name = run_name or (pipeline_name + ' ' +
+                            datetime.datetime.now().strftime(
+                                '%Y-%m-%d %H-%M-%S'))
     experiment = self.create_experiment(name=experiment_name, namespace=namespace)
     run_info = self.run_pipeline(experiment.id, run_name, pipeline_file, arguments)
     return RunPipelineResult(self, run_info)
@@ -584,7 +651,7 @@ class Client(object):
     Args:
       page_token: token for starting of the page.
       page_size: size of the page.
-      sort_by: one of 'field_name', 'field_name des'. For example, 'name des'.
+      sort_by: one of 'field_name', 'field_name desc'. For example, 'name desc'.
       experiment_id: experiment id to filter upon
       namespace: kubernetes namespace to filter upon.
         For single user deployment, leave it as None;
@@ -606,7 +673,7 @@ class Client(object):
     Args:
       page_token: token for starting of the page.
       page_size: size of the page.
-      sort_by: one of 'field_name', 'field_name des'. For example, 'name des'.
+      sort_by: one of 'field_name', 'field_name desc'. For example, 'name desc'.
       experiment_id: experiment id to filter upon
     Returns:
       A response object including a list of recurring_runs and next page token.
@@ -641,19 +708,30 @@ class Client(object):
     return self._run_api.get_run(run_id=run_id)
 
   def wait_for_run_completion(self, run_id, timeout):
-    """Wait for a run to complete.
+    """Waits for a run to complete.
     Args:
       run_id: run id, returned from run_pipeline.
       timeout: timeout in seconds.
     Returns:
-      A run detail object: Most important fields are run and pipeline_runtime
+      A run detail object: Most important fields are run and pipeline_runtime.
+    Raises:
+      TimeoutError: if the pipeline run failed to finish before the specified
+        timeout.
     """
     status = 'Running:'
-    start_time = datetime.now()
-    while status is None or status.lower() not in ['succeeded', 'failed', 'skipped', 'error']:
+    start_time = datetime.datetime.now()
+    last_token_refresh_time = datetime.datetime.now()
+    while (status is None or
+           status.lower() not in ['succeeded', 'failed', 'skipped', 'error']):
+      # Refreshes the access token before it hits the TTL.
+      if (datetime.datetime.now() - last_token_refresh_time
+          > _GCP_ACCESS_TOKEN_TIMEOUT):
+        self._refresh_api_client_token()
+        last_token_refresh_time = datetime.datetime.now()
+        
       get_run_response = self._run_api.get_run(run_id=run_id)
       status = get_run_response.run.status
-      elapsed_time = (datetime.now() - start_time).seconds
+      elapsed_time = (datetime.datetime.now() - start_time).seconds
       logging.info('Waiting for the job to complete...')
       if elapsed_time > timeout:
         raise TimeoutError('Run timeout')
@@ -716,3 +794,16 @@ class Client(object):
       Exception if pipeline is not found.
     """
     return self._pipelines_api.delete_pipeline(id=pipeline_id)
+
+  def list_pipeline_versions(self, pipeline_id, page_token='', page_size=10, sort_by=''):
+    """Lists pipeline versions.
+    Args:
+      pipeline_id: id of the pipeline to list versions
+      page_token: token for starting of the page.
+      page_size: size of the page.
+      sort_by: one of 'field_name', 'field_name des'. For example, 'name des'.
+    Returns:
+      A response object including a list of versions and next page token.
+    """
+
+    return self._pipelines_api.list_pipeline_versions(page_token=page_token, page_size=page_size, sort_by=sort_by, resource_key_type=kfp_server_api.models.api_resource_type.ApiResourceType.PIPELINE, resource_key_id=pipeline_id)

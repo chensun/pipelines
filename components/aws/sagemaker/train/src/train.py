@@ -48,6 +48,12 @@ def create_parser():
 
   parser.add_argument('--tags', type=_utils.yaml_or_json_str, required=False, help='An array of key-value pairs, to categorize AWS resources.', default={})
 
+  ### Start outputs
+  parser.add_argument('--model_artifact_url_output_path', type=str, default='/tmp/model-artifact-url', help='Local output path for the file containing the model artifacts URL.')
+  parser.add_argument('--job_name_output_path', type=str, default='/tmp/job-name', help='Local output path for the file containing the training job name.')
+  parser.add_argument('--training_image_output_path', type=str, default='/tmp/training-image', help='Local output path for the file containing the registry path of the Docker image that contains the training algorithm.')
+  ### End outputs
+
   return parser
 
 def main(argv=None):
@@ -60,18 +66,21 @@ def main(argv=None):
   logging.info('Submitting Training Job to SageMaker...')
   job_name = _utils.create_training_job(client, vars(args))
   logging.info('Job request submitted. Waiting for completion...')
-  _utils.wait_for_training_job(client, job_name)
+  try:
+    _utils.wait_for_training_job(client, job_name)
+  except:
+    raise
+  finally:
+    cw_client = _utils.get_cloudwatch_client(args.region)
+    _utils.print_logs_for_job(cw_client, '/aws/sagemaker/TrainingJobs', job_name)
 
   image = _utils.get_image_from_job(client, job_name)
   model_artifact_url = _utils.get_model_artifacts_from_job(client, job_name)
   logging.info('Get model artifacts %s from training job %s.', model_artifact_url, job_name)
 
-  with open('/tmp/model_artifact_url.txt', 'w') as f:
-    f.write(model_artifact_url)
-  with open('/tmp/job_name.txt', 'w') as f:
-    f.write(job_name)
-  with open('/tmp/training_image.txt', 'w') as f:
-    f.write(image)
+  _utils.write_output(args.model_artifact_url_output_path, model_artifact_url)
+  _utils.write_output(args.job_name_output_path, job_name)
+  _utils.write_output(args.training_image_output_path, image)
 
   logging.info('Job completed.')
 
