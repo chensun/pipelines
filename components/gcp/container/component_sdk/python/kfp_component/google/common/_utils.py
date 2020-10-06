@@ -16,6 +16,9 @@ import logging
 import re
 import os
 import time
+import tempfile
+from ..storage import gcs_utils
+
 
 def normalize_name(name,
               valid_first_char_pattern='a-zA-Z',
@@ -51,20 +54,20 @@ def normalize_name(name,
                 name, normalized_name))
         return normalized_name
 
-def dump_file(path, content):
-    """Dumps string into local file.
+
+def dump_file(gcs_path, content):
+    """Dumps string into gcs file.
 
     Args:
-        path: the local path to the file.
+        gcs_path: the gcs path to the file.
         content: the string content to dump.
     """
-    directory = os.path.dirname(path)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    elif os.path.exists(path):
-        logging.warning('The file {} will be overwritten.'.format(path))
+    tmpdir = tempfile.mkdtemp()
+    path = os.path.join(tmpdir, 'data')
     with open(path, 'w') as f:
-            f.write(content)
+        f.write(content)
+    gcs_utils.upload_blob(path, gcs_path)
+
 
 def check_resource_changed(requested_resource, 
     existing_resource, property_names):
