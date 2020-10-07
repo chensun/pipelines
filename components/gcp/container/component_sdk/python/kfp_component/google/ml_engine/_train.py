@@ -23,7 +23,8 @@ def train(project_id,
           python_module=None,
           package_uris=None,
           region=None,
-          args=None,
+          args_data_file_url=None,
+          args_job_dir=None,
           job_dir=None,
           python_version=None,
           runtime_version=None,
@@ -78,8 +79,11 @@ def train(project_id,
         training_input['packageUris'] = package_uris
     if region:
         training_input['region'] = region
-    if args:
-        training_input['args'] = args
+    training_input['args'] = []
+    if args_data_file_url:
+        training_input['args'].extend(['--data-file-url', args_data_file_url])
+    if args_job_dir:
+        training_input['args'].extend(['--job-dir', job_dir])
     if job_dir:
         training_input['jobDir'] = job_dir
     if python_version:
