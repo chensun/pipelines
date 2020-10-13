@@ -27,7 +27,7 @@ KNOWN_MODEL_NAMES = ['saved_model.pb', 'saved_model.pbtext', 'model.pkl', 'model
 
 @decorators.SetParseFns(python_version=str, runtime_version=str)
 def deploy(model_uri, project_id,
-    model_uri_output_path, model_name_output_path, version_name_output_path,
+    model_uri_output_path=None, model_name_output_path=None, version_name_output_path=None,
     model_id=None, version_id=None, 
     runtime_version=None, python_version=None, model=None, version=None, 
     replace_existing_version=False, set_default=False, wait_interval=30):

@@ -62,6 +62,9 @@ def dump_file(gcs_path, content):
         gcs_path: the gcs path to the file.
         content: the string content to dump.
     """
+    if not gcs_path or not gcs_path.startswith('gs://'):
+        logging.info('Expect GCS URI, got local path instead: {}'.format(gcs_path))
+        return
     tmpdir = tempfile.mkdtemp()
     path = os.path.join(tmpdir, 'data')
     with open(path, 'w') as f:

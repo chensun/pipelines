@@ -18,8 +18,8 @@ from ._create_job import create_job
 
 @decorators.SetParseFns(python_version=str, runtime_version=str)
 def train(project_id,
-          job_id_output_path,
-          job_dir_output_path,
+          job_id_output_path=None,
+          job_dir_output_path=None,
           python_module=None,
           package_uris=None,
           region=None,
@@ -83,9 +83,8 @@ def train(project_id,
     if args_data_file_url:
         training_input['args'].extend(['--data-file-url', args_data_file_url])
     if args_job_dir:
-        training_input['args'].extend(['--job-dir', job_dir])
-    if job_dir:
-        training_input['jobDir'] = job_dir
+        training_input['args'].extend(['--job-dir', args_job_dir])
+        training_input['jobDir'] = args_job_dir
     if python_version:
         training_input['pythonVersion'] = python_version
     if runtime_version:
