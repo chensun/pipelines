@@ -108,6 +108,7 @@ class Executor():
     def _write_output_parameter_value(self, name: str,
                                       value: Union[str, int, float, bool, dict,
                                                    list, Dict, List]):
+        print('debug: enter _write_output_parameter_value()')
         if isinstance(value, (float, int)):
             output = str(value)
         elif isinstance(value, str):
@@ -124,6 +125,7 @@ class Executor():
             self._executor_output['parameterValues'] = {}
 
         self._executor_output['parameterValues'][name] = value
+        print('debug: exit _write_output_parameter_value()')
 
     def _write_output_artifact_payload(self, name: str, value: Any):
         path = self._get_output_artifact_path(name)
@@ -247,8 +249,12 @@ class Executor():
             exist_ok=True)
         with open(self._input['outputs']['outputFile'], 'w') as f:
             f.write(json.dumps(self._executor_output))
+        print(f'debug: wrote to file: {self._input['outputs']['outputFile']}, '
+              f'content: {json.dumps(self._executor_output)}')
 
     def execute(self):
+
+        print('debug: enter execute()')
         annotations = inspect.getfullargspec(self._func).annotations
 
         # Function arguments.
@@ -295,3 +301,4 @@ class Executor():
 
         result = self._func(**func_kwargs)
         self._write_executor_output(result)
+        print('debug: exit executor()')
