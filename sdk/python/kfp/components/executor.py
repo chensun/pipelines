@@ -249,7 +249,7 @@ class Executor():
             exist_ok=True)
         with open(self._input['outputs']['outputFile'], 'w') as f:
             f.write(json.dumps(self._executor_output))
-        print(f'debug: wrote to file: {self._input['outputs']['outputFile']}, '
+        print(f"debug: wrote to file: {self._input['outputs']['outputFile']}, "
               f'content: {json.dumps(self._executor_output)}')
 
     def execute(self):
