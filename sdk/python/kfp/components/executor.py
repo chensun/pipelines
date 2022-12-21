@@ -274,10 +274,15 @@ class Executor():
 
         CLUSTER_SPEC_ENV_VAR_NAME = 'CLUSTER_SPEC'
         cluster_spec_string = os.environ.get(CLUSTER_SPEC_ENV_VAR_NAME)
+
         if cluster_spec_string:
             cluster_spec = json.loads(cluster_spec_string)
+            print("chesu-cluster_spec.task.type: ",
+                  cluster_spec['task']['type'])
             CHIEF_NODE_LABELS = {'workerpool0', 'chief', 'master'}
             write_file = cluster_spec['task']['type'] in CHIEF_NODE_LABELS
+        else:
+            print("chesu-no_cluster_spec-string")
 
         if write_file:
             executor_output_path = self._input['outputs']['outputFile']
